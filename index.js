@@ -1,5 +1,5 @@
 var pg = require('pg');
-var Q = require('q');
+var Promise = require('bluebird');
 
 function pluckId (row) {
 	return +row[0].id;
@@ -21,39 +21,42 @@ function mysqlToPg (sql) {
 
 function ctor (connectionParameters) {
 	return function query () {
-		var deferred = Q.defer();
 		var args = Array.prototype.slice.call(arguments);
-		
+
 		var isInsert = args[0].indexOf('insert into') == 0;
+
 		if (isInsert) {
 			args[0] += ' returning id';
 		}
 
 		args[0] = mysqlToPg(args[0]);
 
-		pg.connect(connectionParameters, function (error, client, done) {
-			if (error) {
-				return deferred.reject(new SqlError(args, error));
-			}
-
-			args.push(function (error, result) {
-				done();
+		var promise = new Promise(function(resolve, reject) {
+			pg.connect(connectionParameters, function (error, client, done) {
 				if (error) {
-					deferred.reject(new SqlError(args, error));
-				} else {
-					deferred.resolve(result.rows);
+					return reject(new SqlError(args, error));
 				}
-			});
 
-			client.query.apply(client, args);
+				args.push(function (error, result) {
+					
+					done(); // Release connection to pool
+
+					if (error) {
+						reject(new SqlError(args, error));
+					} else {
+						resolve(result.rows);
+					}
+				});
+
+				client.query.apply(client, args);
+			});
 		});
 
-		var result = deferred.promise;
 		if (isInsert) {
-			result = result.then(pluckId);
+			promise = promise.then(pluckId);
 		}
 
-		return result;
+		return promise;
 	};
 }
 
